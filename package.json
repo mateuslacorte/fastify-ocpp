@@ -1,6 +1,6 @@
 {
   "name": "fastify-ocpp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Fastify WebSocket OCPP CSMS for 1.6, 2.0.1 and 2.1 with shared-path subprotocol negotiation",
   "type": "module",
   "main": "./dist/index.js",
