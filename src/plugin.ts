@@ -2,6 +2,10 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import websocket from '@fastify/websocket';
 import fp from 'fastify-plugin';
 import {
+  createBasicAuthHook,
+  OCPP_BASIC_AUTH_REALM,
+} from './basic-auth.js';
+import {
   OCPP_DEFAULT_PATH,
   OCPP_SUBPROTOCOLS,
   OCPP_VERSION_BY_SUBPROTOCOL,
@@ -90,6 +94,8 @@ const ocppPluginImpl: FastifyPluginAsync<FastifyOcppOptions> = async (
   const validateOutgoing = options.validateOutgoing ?? true;
   const callTimeoutMs = options.callTimeoutMs ?? 30_000;
   const rejectDuplicates = options.rejectDuplicateConnections ?? true;
+  const getPassword = options.getPassword;
+  const basicAuthRealm = options.basicAuthRealm ?? OCPP_BASIC_AUTH_REALM;
 
   const validator = new SchemaValidator(options.schemasDir);
   const registry = new ConnectionRegistry();
@@ -112,7 +118,14 @@ const ocppPluginImpl: FastifyPluginAsync<FastifyOcppOptions> = async (
 
   fastify.get(
     `${path}/:chargePointId`,
-    { websocket: true },
+    {
+      websocket: true,
+      ...(getPassword
+        ? {
+            preValidation: createBasicAuthHook(getPassword, basicAuthRealm),
+          }
+        : {}),
+    },
     (socket, request: FastifyRequest) => {
       const chargePointId = (request.params as { chargePointId?: string })
         .chargePointId;
@@ -181,7 +194,9 @@ const ocppPluginImpl: FastifyPluginAsync<FastifyOcppOptions> = async (
   fastify.log.info(
     `OCPP WebSocket endpoint: ${path}/:chargePointId (subprotocols: ${versions
       .map((v) => OCPP_SUBPROTOCOLS[v])
-      .join(', ')}; preference order: ${versions.join(' > ')})`,
+      .join(', ')}; preference order: ${versions.join(' > ')}; basic auth: ${
+      getPassword ? 'on' : 'off'
+    })`,
   );
 
   const decorator: OcppDecorator = {

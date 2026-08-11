@@ -107,8 +107,52 @@ await registerOcppVersion(app, '2.1', { path: '/ocpp' });
 | `validateOutgoing` | `true` | Validate outbound CALL / CALLRESULT |
 | `callTimeoutMs` | `30000` | Timeout for CSMS → Charge Point CALLs |
 | `rejectDuplicateConnections` | `true` | Reject a second socket for the same `chargePointId` |
+| `getPassword` | — | HTTP Basic (profiles 1 / 2). Return the station PSK, or `undefined` to reject |
+| `basicAuthRealm` | `OCPP` | Realm sent in `WWW-Authenticate` on 401 |
 | `schemasDir` | package `schemas/` | Override schema root |
 | `onConnect` / `onDisconnect` | — | Lifecycle hooks |
+
+## Authentication (profiles 1 / 2)
+
+OCPP security **profile 1** (Basic) and **profile 2** (TLS + Basic) use the same handshake check. Profile 2 is just this auth over `wss://` (terminate TLS in Fastify or a reverse proxy).
+
+When `getPassword` is set:
+
+1. The Charge Point connects to `wss://csms.example/ocpp/{chargePointId}`.
+2. It sends **HTTP Basic** on the upgrade request.
+3. Username **must** equal `{chargePointId}` in the URL.
+4. Password is a **pre-shared key you provisioned on that station** (not a user password).
+5. The CSMS rejects the handshake with **`401 Unauthorized`** if user/password mismatch — **before** `101 Switching Protocols`.
+
+```ts
+const stationKeys = new Map([
+  ['CP_001', 'shared-secret'],
+]);
+
+await app.register(fastifyOcpp, {
+  versions: ['2.1', '2.0.1', '1.6'],
+  path: '/ocpp',
+  getPassword: (chargePointId) => stationKeys.get(chargePointId),
+});
+```
+
+Example from a charger / wscat:
+
+```http
+GET /ocpp/CP_001 HTTP/1.1
+Host: csms.example
+Authorization: Basic <base64(CP_001:shared-secret)>
+Sec-WebSocket-Protocol: ocpp2.0.1
+Upgrade: websocket
+```
+
+```bash
+wscat -c 'wss://csms.example/ocpp/CP_001' \
+  -s ocpp2.0.1 \
+  -H "Authorization: Basic $(printf 'CP_001:shared-secret' | base64)"
+```
+
+Omit `getPassword` for security profile 0 (no authentication).
 
 ## Handlers & outbound calls
 
@@ -162,6 +206,7 @@ schemas/
   1.6/   2.0.1/   2.1/     # official OCA JSON schemas
 src/
   plugin.ts                # Fastify plugin + subprotocol negotiation
+  basic-auth.ts            # HTTP Basic (profiles 1 / 2) on the upgrade
   connection.ts            # per-socket session
   framing.ts               # CALL / CALLRESULT / CALLERROR
   schema-validator.ts
@@ -175,7 +220,7 @@ examples/
 ## Notes
 
 - Implements **OCPP JSON over WebSocket (OCPP-J)** only — not OCPP-S (SOAP) 1.6.
-- Business logic (auth, transactions, device model, smart charging, …) lives in your handlers; this library handles transport, negotiation, framing, and schema validation.
+- Business logic (auth, transactions, device model, smart charging, …) lives in your handlers; this library handles transport, negotiation, framing, schema validation, and optional HTTP Basic on the upgrade (profiles 1 / 2).
 - Specs: OCPP 1.6 JSON + ocpp-j-1.6; OCPP 2.0.1 / 2.1 part 3 schemas and part 4 OCPP-J (Open Charge Alliance).
 
 ## License

@@ -1,3 +1,4 @@
+import type { FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import type {
   JsonObject,
@@ -48,6 +49,15 @@ export interface OcppConnectionInfo {
   remoteAddress?: string;
 }
 
+/**
+ * Look up the pre-shared key provisioned on a Charge Point.
+ * Return `undefined` to reject the WebSocket upgrade with 401.
+ */
+export type OcppGetPassword = (
+  chargePointId: string,
+  request: FastifyRequest,
+) => string | undefined | Promise<string | undefined>;
+
 export interface FastifyOcppOptions {
   /**
    * Which protocol versions to accept, in preference order.
@@ -78,6 +88,28 @@ export interface FastifyOcppOptions {
    * chargePointId. Default true.
    */
   rejectDuplicateConnections?: boolean;
+  /**
+   * HTTP Basic Authentication for OCPP security profiles 1 (Basic) and
+   * 2 (TLS + Basic).
+   *
+   * When set, the Charge Point must send `Authorization: Basic` on the
+   * WebSocket upgrade. Username **must** equal `{chargePointId}` in the URL.
+   * Password is the pre-shared key provisioned on that station — not an
+   * end-user password.
+   *
+   * Return the expected password, or `undefined` to reject. Comparison is
+   * timing-safe. Missing / mismatched credentials are rejected with
+   * `401 Unauthorized` **before** `101 Switching Protocols`.
+   *
+   * Omit for security profile 0 (no authentication). TLS for profile 2 is
+   * provided by Fastify HTTPS or a reverse proxy, not by this option.
+   */
+  getPassword?: OcppGetPassword;
+  /**
+   * Realm advertised in `WWW-Authenticate` on 401 responses.
+   * Default: `"OCPP"`.
+   */
+  basicAuthRealm?: string;
   /** Optional hook invoked after a connection is accepted. */
   onConnect?: (info: OcppConnectionInfo) => void | Promise<void>;
   /** Optional hook invoked after a connection closes. */

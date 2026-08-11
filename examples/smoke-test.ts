@@ -3,6 +3,8 @@ import WebSocket from 'ws';
 import {
   fastifyOcpp,
   parseOcppMessage,
+  parseBasicAuthorization,
+  passwordsEqual,
   MessageType,
   selectSubprotocol,
 } from '../src/index.js';
@@ -208,5 +210,133 @@ await new Promise<void>((resolve) => {
   });
 });
 
+// --- HTTP Basic (profiles 1 / 2) ---
+
+const parsed = parseBasicAuthorization(
+  'Basic ' + Buffer.from('CP_001:shared-secret').toString('base64'),
+);
+if (parsed?.username !== 'CP_001' || parsed.password !== 'shared-secret') {
+  console.error('FAIL parseBasicAuthorization:', parsed);
+  failed++;
+} else {
+  console.log('OK  parseBasicAuthorization');
+}
+
+if (!passwordsEqual('shared-secret', 'shared-secret') || passwordsEqual('a', 'b')) {
+  console.error('FAIL passwordsEqual');
+  failed++;
+} else {
+  console.log('OK  passwordsEqual');
+}
+
+const authApp = Fastify({ logger: false });
+const stationKeys = new Map([['CP_001', 'shared-secret']]);
+await authApp.register(fastifyOcpp, {
+  versions: ['2.0.1'],
+  path: '/ocpp',
+  getPassword: (chargePointId) => stationKeys.get(chargePointId),
+});
+await authApp.listen({ port: 0, host: '127.0.0.1' });
+const authAddress = authApp.server.address();
+if (!authAddress || typeof authAddress === 'string') throw new Error('No auth address');
+const authPort = authAddress.port;
+const authUrl = (id: string) => `ws://127.0.0.1:${authPort}/ocpp/${id}`;
+const basic = (user: string, pass: string) =>
+  'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+
+function expectUpgradeStatus(
+  name: string,
+  url: string,
+  headers: Record<string, string> | undefined,
+  expectStatus: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(url, 'ocpp2.0.1', headers ? { headers } : undefined);
+    const timer = setTimeout(() => {
+      console.error(`FAIL ${name}: timeout`);
+      failed++;
+      ws.terminate();
+      resolve();
+    }, 5000);
+    ws.on('open', () => {
+      clearTimeout(timer);
+      console.error(`FAIL ${name}: unexpectedly open (expected ${expectStatus})`);
+      failed++;
+      ws.close();
+      resolve();
+    });
+    ws.on('unexpected-response', (_req, res) => {
+      clearTimeout(timer);
+      const www = res.headers['www-authenticate'];
+      if (res.statusCode !== expectStatus) {
+        console.error(`FAIL ${name}: status ${res.statusCode}, expected ${expectStatus}`);
+        failed++;
+      } else if (expectStatus === 401 && !String(www ?? '').startsWith('Basic ')) {
+        console.error(`FAIL ${name}: missing WWW-Authenticate, got ${www}`);
+        failed++;
+      } else {
+        console.log(`OK  ${name} -> ${res.statusCode}`);
+      }
+      res.resume();
+      resolve();
+    });
+    ws.on('error', () => {
+      // `ws` also emits error after unexpected-response; ignore if already settled.
+    });
+  });
+}
+
+await expectUpgradeStatus('basic-missing', authUrl('CP_001'), undefined, 401);
+await expectUpgradeStatus(
+  'basic-wrong-user',
+  authUrl('CP_001'),
+  { Authorization: basic('OTHER', 'shared-secret') },
+  401,
+);
+await expectUpgradeStatus(
+  'basic-wrong-pass',
+  authUrl('CP_001'),
+  { Authorization: basic('CP_001', 'nope') },
+  401,
+);
+await expectUpgradeStatus(
+  'basic-unknown-station',
+  authUrl('UNKNOWN'),
+  { Authorization: basic('UNKNOWN', 'anything') },
+  401,
+);
+
+await new Promise<void>((resolve) => {
+  const ws = new WebSocket(authUrl('CP_001'), 'ocpp2.0.1', {
+    headers: { Authorization: basic('CP_001', 'shared-secret') },
+  });
+  const timer = setTimeout(() => {
+    console.error('FAIL basic-ok: timeout');
+    failed++;
+    ws.terminate();
+    resolve();
+  }, 5000);
+  ws.on('open', () => {
+    clearTimeout(timer);
+    console.log('OK  basic-ok -> 101');
+    ws.close();
+    resolve();
+  });
+  ws.on('unexpected-response', (_req, res) => {
+    clearTimeout(timer);
+    console.error(`FAIL basic-ok: status ${res.statusCode}`);
+    failed++;
+    res.resume();
+    resolve();
+  });
+  ws.on('error', (err) => {
+    clearTimeout(timer);
+    console.error('FAIL basic-ok:', err.message);
+    failed++;
+    resolve();
+  });
+});
+
+await authApp.close();
 await app.close();
 process.exit(failed ? 1 : 0);

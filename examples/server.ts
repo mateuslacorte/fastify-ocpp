@@ -16,6 +16,10 @@ await app.register(fastifyOcpp, {
   //   ws://host:9000/ocpp/:chargePointId
   versions: ['2.1', '2.0.1', '1.6'],
   path: '/ocpp',
+  // Profiles 1 / 2: HTTP Basic on the upgrade. Username must equal
+  // {chargePointId}; password is the station PSK (not a user password).
+  // Mismatch → 401 before 101 Switching Protocols. Omit for profile 0.
+  // getPassword: (chargePointId) => stationKeys.get(chargePointId),
   onConnect(info) {
     app.log.info(
       { chargePointId: info.chargePointId, version: info.version },

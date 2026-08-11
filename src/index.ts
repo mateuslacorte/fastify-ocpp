@@ -41,8 +41,15 @@ export type {
   OcppCallContext,
   OcppConnectionInfo,
   OcppCallError,
+  OcppGetPassword,
   SendCallOptions,
 } from './types.js';
+
+export {
+  parseBasicAuthorization,
+  passwordsEqual,
+  OCPP_BASIC_AUTH_REALM,
+} from './basic-auth.js';
 
 export {
   VERSION_META,
